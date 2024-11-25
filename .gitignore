@@ -1,0 +1,5 @@
+.direnv
+.out
+.env
+tmp
+data
