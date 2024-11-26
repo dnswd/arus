@@ -29,24 +29,32 @@ func (m Money) Subtract(other Money) Money {
 	return Money{Amount: m.Amount - other.Amount, Currency: m.Currency}
 }
 
-type AllocationType int
+type AllocationRule struct {
+	CategoryType CategoryType
+	Percentage   float64
+}
+
+type CategoryType int
 
 const (
-	FixedAmount AllocationType = iota
-	Percentage
+	Expense CategoryType = iota
+	Emergency
+	Savings
 )
 
-type AllocationRule struct {
-	CategoryName string
-	Type         AllocationType
-	Amount       Money   // Used if Type is FixedAmount
-	Percentage   float64 // Used if Type is Percentage (0 to 1)
+func (c CategoryType) String() string {
+	return [...]string{"Expense", "Emergency", "Savings"}[c]
+}
+
+type BankAccount struct {
+	AccountNumber string
+	BankName      string
 }
 
 type Category struct {
-	Name        string
+	Type        CategoryType
 	Balance     Money
-	BankAccount string // Identifier for the bank account
+	BankAccount BankAccount
 }
 
 func (c *Category) Credit(amount Money) {
@@ -55,13 +63,13 @@ func (c *Category) Credit(amount Money) {
 
 func (c *Category) Debit(amount Money) error {
 	if c.Balance.Amount < amount.Amount {
-		return fmt.Errorf("insufficient funds in category %s", c.Name)
+		return fmt.Errorf("insufficient funds in category %s", c.Type.String())
 	}
 	c.Balance = c.Balance.Subtract(amount)
 	return nil
 }
 
-type Expense struct {
+type ExpenseEntry struct {
 	Amount      Money
 	Date        time.Time
 	Description string
@@ -69,17 +77,38 @@ type Expense struct {
 
 type User struct {
 	ID              string
-	Categories      map[string]*Category
+	Categories      map[CategoryType]*Category
 	AllocationRules []AllocationRule
 }
 
 func NewUser(id string) *User {
 	return &User{
 		ID: id,
-		Categories: map[string]*Category{
-			"Savings":   {Name: "Savings", Balance: Money{Amount: 0, Currency: "USD"}},
-			"Emergency": {Name: "Emergency", Balance: Money{Amount: 0, Currency: "USD"}},
-			"Expense":   {Name: "Expense", Balance: Money{Amount: 0, Currency: "USD"}},
+		Categories: map[CategoryType]*Category{
+			Expense: {
+				Type:    Expense,
+				Balance: Money{Amount: 0, Currency: "USD"},
+				BankAccount: BankAccount{
+					AccountNumber: "EXP123",
+					BankName:      "Expense Bank",
+				},
+			},
+			Emergency: {
+				Type:    Emergency,
+				Balance: Money{Amount: 0, Currency: "USD"},
+				BankAccount: BankAccount{
+					AccountNumber: "EMG123",
+					BankName:      "Emergency Bank",
+				},
+			},
+			Savings: {
+				Type:    Savings,
+				Balance: Money{Amount: 0, Currency: "USD"},
+				BankAccount: BankAccount{
+					AccountNumber: "SAV123",
+					BankName:      "Savings Bank",
+				},
+			},
 		},
 		AllocationRules: []AllocationRule{},
 	}
@@ -87,54 +116,40 @@ func NewUser(id string) *User {
 
 func (u *User) AllocateIncome(income Money) error {
 	totalPercentage := 0.0
-	totalFixed := Money{Amount: 0, Currency: income.Currency}
 
-	// First pass: calculate total fixed amounts and percentages
+	if len(u.AllocationRules) < 1 {
+		return errors.New("user does not have allocation planned")
+	}
+
+	// Calculate total percentages
 	for _, rule := range u.AllocationRules {
-		if rule.Type == FixedAmount {
-			totalFixed = totalFixed.Add(rule.Amount)
-		} else if rule.Type == Percentage {
-			totalPercentage += rule.Percentage
-		}
+		totalPercentage += rule.Percentage
 	}
 
 	if totalPercentage > 1.0 {
 		return errors.New("total allocation percentages exceed 100%")
 	}
 
-	if totalFixed.Amount > income.Amount {
-		return errors.New("income insufficient for fixed allocations")
-	}
-
-	remainingIncome := income.Subtract(totalFixed)
-
-	// Second pass: allocate income to categories
+	// Allocate income to categories
 	for _, rule := range u.AllocationRules {
-		category, exists := u.Categories[rule.CategoryName]
+		category, exists := u.Categories[rule.CategoryType]
 		if !exists {
-			return fmt.Errorf("category %s does not exist", rule.CategoryName)
+			return fmt.Errorf("category %s does not exist", rule.CategoryType.String())
 		}
 
-		var allocation Money
-		if rule.Type == FixedAmount {
-			allocation = rule.Amount
-		} else if rule.Type == Percentage {
-			allocationAmount := remainingIncome.Amount * rule.Percentage
-			allocation = Money{Amount: allocationAmount, Currency: income.Currency}
-		}
-
+		allocationAmount := income.Amount * rule.Percentage
+		allocation := Money{Amount: allocationAmount, Currency: income.Currency}
 		category.Credit(allocation)
 	}
-
 	return nil
 }
 
-func (u *User) ProcessExpense(expense Expense) error {
-	deductionOrder := []string{"Expense", "Emergency", "Savings"}
+func (u *User) ProcessExpense(expense ExpenseEntry) error {
+	deductionOrder := []CategoryType{Expense, Emergency, Savings}
 	amountToDeduct := expense.Amount
 
-	for _, categoryName := range deductionOrder {
-		category := u.Categories[categoryName]
+	for _, categoryType := range deductionOrder {
+		category := u.Categories[categoryType]
 		if category == nil {
 			continue
 		}
@@ -146,11 +161,11 @@ func (u *User) ProcessExpense(expense Expense) error {
 			amountToDeduct = Money{Amount: 0, Currency: amountToDeduct.Currency}
 			break
 		} else {
-			deductableAmount := Money{Amount: category.Balance.Amount, Currency: category.Balance.Currency}
-			if err := category.Debit(deductableAmount); err != nil {
+			deductibleAmount := Money{Amount: category.Balance.Amount, Currency: category.Balance.Currency}
+			if err := category.Debit(deductibleAmount); err != nil {
 				return err
 			}
-			amountToDeduct = amountToDeduct.Subtract(deductableAmount)
+			amountToDeduct = amountToDeduct.Subtract(deductibleAmount)
 		}
 	}
 
@@ -162,21 +177,23 @@ func (u *User) ProcessExpense(expense Expense) error {
 }
 
 type AccountStatement struct {
-	BankAccountID string
-	Expenses      []Expense
+	BankAccount BankAccount
+	Expenses    []ExpenseEntry
 }
 
 func (u *User) ProcessAccountStatement(statement AccountStatement) error {
 	// Find the category associated with the bank account
 	var category *Category
 	for _, c := range u.Categories {
-		if c.BankAccount == statement.BankAccountID {
+		if c.BankAccount.AccountNumber == statement.BankAccount.AccountNumber &&
+			c.BankAccount.BankName == statement.BankAccount.BankName {
 			category = c
 			break
 		}
 	}
 	if category == nil {
-		return fmt.Errorf("no category associated with bank account %s", statement.BankAccountID)
+		return fmt.Errorf("no category associated with bank account %s at %s",
+			statement.BankAccount.AccountNumber, statement.BankAccount.BankName)
 	}
 
 	// Process each expense
@@ -273,9 +290,9 @@ func main() {
 	fmt.Println("Retrieved user ID:", retrievedUser.ID)
 
 	user.AllocationRules = []AllocationRule{
-		{CategoryName: "Savings", Type: Percentage, Percentage: 0.2},
-		{CategoryName: "Emergency", Type: Percentage, Percentage: 0.3},
-		{CategoryName: "Expense", Type: Percentage, Percentage: 0.5},
+		{CategoryType: Expense, Percentage: 0.5},
+		{CategoryType: Emergency, Percentage: 0.3},
+		{CategoryType: Savings, Percentage: 0.2},
 	}
 
 	income := Money{Amount: 1000, Currency: "USD"}
@@ -283,6 +300,20 @@ func main() {
 	if err != nil {
 		fmt.Println("unexpected error: ", err)
 	}
+
 	jcart, _ := json.Marshal(user)
+	fmt.Println(string(jcart))
+
+	expense := ExpenseEntry{
+		Amount:      Money{Amount: 900, Currency: "USD"},
+		Description: "Unexpected Expense",
+	}
+
+	err = user.ProcessExpense(expense)
+	if err != nil {
+		fmt.Printf("unexpected error: %v", err)
+	}
+
+	jcart, _ = json.Marshal(user)
 	fmt.Println(string(jcart))
 }
