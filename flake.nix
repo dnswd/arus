@@ -106,6 +106,14 @@
                 '';
             })
           ];
+          shellHook = ''
+            GOROOT="$(dirname $(dirname $(which go)))/share/go"
+            BUILD_REGISTRY="ghcr.io"
+            export GOROOT
+            export DOCKER_HOST
+            export BUILD_REGISTRY
+            unset GOPATH;
+          '';
         };
       };
     };
