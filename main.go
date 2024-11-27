@@ -7,16 +7,12 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
-type Statement struct {
-	ID     string `json:"id,omitempty"`
-	BankID string `json:"bank_id,omitempty"`
-	Amount int64  `json:"amount,omitempty"`
-}
-
 type Money struct {
-	Amount   float64
+	Amount   decimal.Decimal
 	Currency string
 }
 
@@ -69,7 +65,7 @@ func (c *Category) Debit(amount Money) error {
 	return nil
 }
 
-type ExpenseEntry struct {
+type Transaction struct {
 	Amount      Money
 	Date        time.Time
 	Description string
@@ -144,7 +140,7 @@ func (u *User) AllocateIncome(income Money) error {
 	return nil
 }
 
-func (u *User) ProcessExpense(expense ExpenseEntry) error {
+func (u *User) ProcessExpense(expense Transaction) error {
 	deductionOrder := []CategoryType{Expense, Emergency, Savings}
 	amountToDeduct := expense.Amount
 
@@ -178,7 +174,7 @@ func (u *User) ProcessExpense(expense ExpenseEntry) error {
 
 type AccountStatement struct {
 	BankAccount BankAccount
-	Expenses    []ExpenseEntry
+	Expenses    []Transaction
 }
 
 func (u *User) ProcessAccountStatement(statement AccountStatement) error {
@@ -304,7 +300,7 @@ func main() {
 	jcart, _ := json.Marshal(user)
 	fmt.Println(string(jcart))
 
-	expense := ExpenseEntry{
+	expense := Transaction{
 		Amount:      Money{Amount: 900, Currency: "USD"},
 		Description: "Unexpected Expense",
 	}
